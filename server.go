@@ -59,12 +59,10 @@ func socketHandler(w http.ResponseWriter, r *http.Request) {
 	addClient(sockClient)
 
 	for {
-		log.Println("abc")
 		log.Println(len(ActiveClients), ActiveClients)
 		messageType, p, err := ws.ReadMessage()
 		if err != nil {
 			deleteClient(sockClient)
-			log.Println("bye")
 			log.Println(err)
 			return
 		}

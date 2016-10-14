@@ -10,31 +10,42 @@ import (
 	"sync"
 )
 
-var ActiveClients = make(map[ClientConn]int)
-var ActiveClientsRWMutex sync.RWMutex
+type ChatRoom struct {
+	activeClients map[ClientConn]int
+	activeClientsRWMutex sync.RWMutex
+	queue chan string
+}
+
+// chat room init()
+func (cr *ChatRoom) Init() {
+	cr.activeClients = make(map[ClientConn]int)
+}
 
 type ClientConn struct {
 	websocket *websocket.Conn
 	clientIP  net.Addr
 }
 
-func addClient(cc ClientConn) {
-	ActiveClientsRWMutex.Lock()
-	ActiveClients[cc] = 0
-	ActiveClientsRWMutex.Unlock()
+func (cr *ChatRoom) AddClient(cc ClientConn) {
+	defer cr.activeClientsRWMutex.Unlock()
+
+	cr.activeClientsRWMutex.Lock()
+	cr.activeClients[cc] = 0
 }
 
-func deleteClient(cc ClientConn) {
-	ActiveClientsRWMutex.Lock()
-	delete(ActiveClients, cc)
-	ActiveClientsRWMutex.Unlock()
+
+func (cr *ChatRoom) DeleteClient(cc ClientConn) {
+	cr.activeClientsRWMutex.Lock()
+	delete(cr.activeClients, cc)
+	cr.activeClientsRWMutex.Unlock()
 }
 
-func broadcastMessage(messageType int, message []byte) {
-	ActiveClientsRWMutex.RLock()
-	defer ActiveClientsRWMutex.RUnlock()
 
-	for client, _ := range ActiveClients {
+func (cr *ChatRoom) BroadcastMessage(messageType int, message []byte) {
+	cr.activeClientsRWMutex.RLock()
+	defer cr.activeClientsRWMutex.RUnlock()
+
+	for client, _ := range cr.activeClients {
 		err := client.websocket.WriteMessage(messageType, message)
 		if err != nil {
 			log.Println(err)
@@ -44,7 +55,7 @@ func broadcastMessage(messageType int, message []byte) {
 }
 
 func socketHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println(ActiveClients)
+	log.Println(chatRoom.activeClients)
 	ws, err := websocket.Upgrade(w, r, nil, 1024, 1024)
 	// error handling
 	if _, ok := err.(websocket.HandshakeError); ok {
@@ -56,19 +67,24 @@ func socketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	clientAddr := ws.RemoteAddr()
 	sockClient := ClientConn{ws, clientAddr}
-	addClient(sockClient)
+	chatRoom.AddClient(sockClient)
 
-	for {
-		log.Println(len(ActiveClients), ActiveClients)
-		messageType, p, err := ws.ReadMessage()
-		if err != nil {
-			deleteClient(sockClient)
-			log.Println(err)
-			return
+	go func() {
+		for {
+			log.Println(len(chatRoom.activeClients), chatRoom.activeClients)
+			messageType, p, err := ws.ReadMessage()
+			if err != nil {
+				chatRoom.DeleteClient(sockClient)
+				log.Println(err)
+				return
+			}
+			chatRoom.BroadcastMessage(messageType, p)
 		}
-		broadcastMessage(messageType, p)
-	}
+	}()
+
 }
+
+var chatRoom ChatRoom
 
 func main() {
 	m := martini.Classic()
@@ -76,6 +92,7 @@ func main() {
 	m.Get("/", func(r render.Render) {
 		r.HTML(200, "index", nil)
 	})
+	chatRoom.Init()
 	m.Get("/sock", socketHandler)
 	m.Run()
 }
